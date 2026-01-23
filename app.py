@@ -185,7 +185,7 @@ def generate_seo_content_with_retry(provider, api_key, model_name, title, handle
             if provider == "Google Gemini":
                 configure_genai(api_key)
                 GenerativeModel = getattr(genai, "GenerativeModel", None)
-                model: Any = GenerativeModel(model_name)
+                model: Any = GenerativeModel(model_name) # type: ignore
                 
                 # Try Structured Outputs
                 try:
@@ -257,7 +257,7 @@ with tab1:
 
             # 3. VALIDATION STEP (Pandera)
             try:
-                df = SHOPIFY_CSV_SCHEMA.validate(df, lazy=True)
+                df = SHOPIFY_CSV_SCHEMA.validate(df, lazy=True) # pyright: ignore[reportArgumentType]
                 st.success("✅ Valid Shopify/Matrixify CSV detected.")
                 
                 # Store in session state so it's ready for processing
