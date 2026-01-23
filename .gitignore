@@ -1,0 +1,2 @@
+# Secrets and sensitive files
+.streamlit/secrets.toml
