@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
+from google import genai
 import shopify
 from openai import OpenAI
 import json
@@ -96,18 +96,13 @@ if api_provider == "Google Gemini":
             st.sidebar.error("Enter API Key first.")
         else:
             try:
-                configure = getattr(genai, "configure", None)
-                if not callable(configure):
-                    raise RuntimeError("google.generativeai.configure is not available in this SDK version")
-                configure(api_key=api_key)
-                list_models = getattr(genai, "list_models", None)
-                if not callable(list_models):
-                    raise RuntimeError("google.generativeai.list_models is not available in this SDK version")
-                _ = list(cast(Any, list_models)())  # simple call to validate key
+                client = genai.Client(api_key=api_key)
+                # Test the key by listing models
+                _ = list(client.models.list())
                 st.sidebar.success("Client configured successfully!")
             except Exception as e:
                 msg = str(e)
-                # Common failure mode: expired/invalid key (HTTP 400 API_KEY_INVALID)
+                # Common failure mode: expired/invalid key
                 if "API_KEY_INVALID" in msg or "API key expired" in msg or "key expired" in msg.lower():
                     st.sidebar.error(
                         "Google API key is invalid/expired. Generate a new key in Google AI Studio, "
@@ -195,15 +190,11 @@ SHOPIFY_CSV_SCHEMA = pa.DataFrameSchema(
     strict=False,  # allow extra columns from Shopify/Matrixify exports
 )
 
-def configure_genai(api_key):
-    """Configure the Gemini SDK with the provided API key."""
+def get_genai_client(api_key):
+    """Get a Gemini SDK client with the provided API key."""
     if not api_key:
         return None
-    configure = getattr(genai, "configure", None)
-    if not callable(configure):
-        raise RuntimeError("google.generativeai.configure is not available in this SDK version")
-    configure(api_key=api_key)
-    return True
+    return genai.Client(api_key=api_key)
 
 def clean_json_string(text_response):
     """Cleans the response text to ensure valid JSON."""
@@ -293,27 +284,29 @@ def generate_seo_content_with_retry(provider, api_key, model_name, title, handle
     for attempt in range(max_retries):
         try:
             if provider == "Google Gemini":
-                configure_genai(api_key)
-                GenerativeModel = getattr(genai, "GenerativeModel", None)
-                if not callable(GenerativeModel):
-                    raise RuntimeError("google.generativeai.GenerativeModel is not available in this SDK version")
-                model: Any = GenerativeModel(model_name)
+                client = get_genai_client(api_key)
+                if not client:
+                    return None, "Google API Key missing."
 
-                # Prefer Structured Outputs (if supported by the installed SDK).
+                # Prefer Structured Outputs
                 try:
-                    response = model.generate_content(
-                        prompt,
-                        generation_config=cast(Any, {
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={
                             "response_mime_type": "application/json",
                             "response_schema": SEOData,
-                        }),
+                        },
                     )
+                    # If we used response_schema, we can use response.parsed
+                    if hasattr(response, 'parsed') and response.parsed:
+                        return response.parsed.model_dump(), None
                 except Exception:
                     # Fallback: request JSON only and validate locally with Pydantic.
-                    response = model.generate_content(
-                        prompt
-                        + "\n\nReturn ONLY valid JSON (no markdown, no prose).",
-                        generation_config={"response_mime_type": "application/json"},
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt + "\n\nReturn ONLY valid JSON (no markdown, no prose).",
+                        config={"response_mime_type": "application/json"},
                     )
 
                 data = _parse_and_validate(response.text)

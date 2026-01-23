@@ -5,8 +5,6 @@ pydantic>=2
 pandera
 ShopifyAPI
 openai
-google-generativeai
-httplib2
-pyparsing>=3.1,<4
+google-genai
 # Avoid urllib3 v2 + LibreSSL warning on macOS system Python builds
 urllib3<2
