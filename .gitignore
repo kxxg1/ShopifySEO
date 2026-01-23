@@ -1,2 +1,22 @@
 # Secrets and sensitive files
 .streamlit/secrets.toml
+
+# Local environments
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Env files
+.env
+.env.*
