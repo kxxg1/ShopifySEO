@@ -1,9 +1,12 @@
 # REQUIREMENTS (Paste these into your requirements.txt or pip install command):
-# pip install streamlit pandas google-generativeai shopifyAPI openai pydantic pandera "pyparsing<3"
+# pip install streamlit pandas google-genai ShopifyAPI openai pydantic pandera
 
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
+try:
+    from google import genai
+except Exception:  # pragma: no cover
+    genai = None  # type: ignore[assignment]
 import shopify
 from openai import OpenAI
 import json
@@ -75,12 +78,17 @@ if api_provider == "Google Gemini":
             st.sidebar.error("Enter API Key first.")
         else:
             try:
-                configure = getattr(genai, "configure", None)
-                if configure: configure(api_key=api_key)
-                list_models = getattr(genai, "list_models", None)
-                if list_models:
-                    _ = list(cast(Any, list_models)())
-                    st.sidebar.success("Client configured successfully!")
+                if genai is None:
+                    raise RuntimeError("Google GenAI SDK not installed. Run: pip install -r requirements.txt")
+
+                client = genai.Client(api_key=api_key)
+                # Listing models is the closest equivalent to the old SDK "smoke test".
+                # Some accounts/projects may not have permission to list models; init is still valid.
+                try:
+                    _ = client.models.list()
+                    st.sidebar.success("Client initialized successfully!")
+                except Exception as list_err:
+                    st.sidebar.warning(f"Client initialized, but listing models failed: {list_err}")
             except Exception as e:
                 st.sidebar.error(f"Error: {e}")
 
@@ -124,10 +132,12 @@ SHOPIFY_CSV_SCHEMA = pa.DataFrameSchema(
 )
 
 def configure_genai(api_key):
-    if not api_key: return None
-    configure = getattr(genai, "configure", None)
-    if configure: configure(api_key=api_key)
-    return True
+    """Create a google-genai Client for the provided API key."""
+    if not api_key:
+        return None
+    if genai is None:
+        raise RuntimeError("Google GenAI SDK not installed. Run: pip install -r requirements.txt")
+    return genai.Client(api_key=api_key)
 
 def clean_json_string(text_response):
     if not text_response: return ""
@@ -139,7 +149,7 @@ def clean_json_string(text_response):
 
 def generate_perplexity_content(api_key, model, prompt):
     if not api_key: raise ValueError("Perplexity API Key is missing.")
-    client = OpenAI(api_key=api_key, base_url="[https://api.perplexity.ai](https://api.perplexity.ai)")
+    client = OpenAI(api_key=api_key, base_url="https://api.perplexity.ai")
     try:
         response = client.chat.completions.create(
             model=model,
@@ -175,29 +185,45 @@ def generate_seo_content_with_retry(provider, api_key, model_name, title, handle
     """
     
     def _parse_and_validate(raw_text: Any):
-        if not raw_text: raise ValueError("Empty AI response")
+        if not raw_text:
+            raise ValueError("Empty AI response")
         cleaned_text = clean_json_string(str(raw_text))
-        data = json.loads(cleaned_text)
-        return SEOData.model_validate(data).model_dump()
+        # Prefer JSON-string validation when available.
+        try:
+            return SEOData.model_validate_json(cleaned_text).model_dump()
+        except Exception:
+            data = json.loads(cleaned_text)
+            return SEOData.model_validate(data).model_dump()
 
     for attempt in range(max_retries):
         try:
             if provider == "Google Gemini":
-                configure_genai(api_key)
-                GenerativeModel = getattr(genai, "GenerativeModel", None)
-                model: Any = GenerativeModel(model_name) # type: ignore
-                
-                # Try Structured Outputs
-                try:
-                    response = model.generate_content(
-                        prompt,
-                        generation_config={"response_mime_type": "application/json", "response_schema": SEOData}
-                    )
-                except:
-                    # Fallback
-                    response = model.generate_content(prompt + " Return strict JSON.", generation_config={"response_mime_type": "application/json"})
-                
-                return _parse_and_validate(response.text), None
+                client = configure_genai(api_key)
+                if client is None:
+                    raise ValueError("Google Gemini API key is missing.")
+
+                # Per the current SDK docs: provide a JSON schema to constrain output.
+                response_schema = SEOData.model_json_schema()
+                # Gemini 2.0 models require explicit property ordering.
+                if model_name.startswith("gemini-2.0"):
+                    response_schema = dict(response_schema)
+                    response_schema["propertyOrdering"] = list(SEOData.model_fields.keys())
+
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_json_schema": response_schema,
+                        "temperature": 0.6,
+                    },
+                )
+
+                raw_text = getattr(response, "text", None)
+                if not raw_text:
+                    raw_text = str(response)
+
+                return _parse_and_validate(raw_text), None
 
             elif provider == "Perplexity (Sonar)":
                 raw_text = generate_perplexity_content(api_key, model_name, prompt)
