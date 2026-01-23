@@ -4,7 +4,7 @@ Streamlit app for generating and syncing SEO content to Shopify collections (CSV
 
 ## Quick start
 
-1) Create a virtualenv + install deps:
+1. Create a virtualenv + install deps:
 
 ```bash
 python -m venv venv
@@ -12,7 +12,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-2) Configure Streamlit secrets:
+1. Configure Streamlit secrets:
 
 ```bash
 mkdir -p .streamlit
@@ -25,7 +25,7 @@ Edit `.streamlit/secrets.toml` and set:
 - `PERPLEXITY_API_KEY` (if using Perplexity Sonar)
 - `SHOPIFY_SHOP_URL` and `SHOPIFY_ACCESS_TOKEN` (only needed for Direct Sync)
 
-3) Run the app:
+1. Run the app:
 
 ```bash
 streamlit run app.py
