@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import shopify
 from openai import OpenAI
 import json
@@ -81,8 +82,8 @@ if api_provider == "Google Gemini":
     model_option = st.sidebar.selectbox(
         "Select AI Model",
         (
-            "gemini-2.5-pro",         # High reasoning, long context
-            "gemini-2.5-flash",       # Fast + strong reasoning
+            "gemini-1.5-pro",         # High reasoning, long context
+            "gemini-1.5-flash",       # Fast + strong reasoning
             "gemini-pro-latest",      # Latest Gemini Pro
             "gemini-flash-latest",    # Latest Gemini Flash
             "gemini-2.0-flash",       # Stable fast model
@@ -96,14 +97,8 @@ if api_provider == "Google Gemini":
             st.sidebar.error("Enter API Key first.")
         else:
             try:
-                configure = getattr(genai, "configure", None)
-                if not callable(configure):
-                    raise RuntimeError("google.generativeai.configure is not available in this SDK version")
-                configure(api_key=api_key)
-                list_models = getattr(genai, "list_models", None)
-                if not callable(list_models):
-                    raise RuntimeError("google.generativeai.list_models is not available in this SDK version")
-                _ = list(cast(Any, list_models)())  # simple call to validate key
+                client = genai.Client(api_key=api_key)
+                _ = list(client.models.list())
                 st.sidebar.success("Client configured successfully!")
             except Exception as e:
                 msg = str(e)
@@ -195,15 +190,11 @@ SHOPIFY_CSV_SCHEMA = pa.DataFrameSchema(
     strict=False,  # allow extra columns from Shopify/Matrixify exports
 )
 
-def configure_genai(api_key):
-    """Configure the Gemini SDK with the provided API key."""
+def get_genai_client(api_key):
+    """Returns a Gemini Client instance."""
     if not api_key:
         return None
-    configure = getattr(genai, "configure", None)
-    if not callable(configure):
-        raise RuntimeError("google.generativeai.configure is not available in this SDK version")
-    configure(api_key=api_key)
-    return True
+    return genai.Client(api_key=api_key)
 
 def clean_json_string(text_response):
     """Cleans the response text to ensure valid JSON."""
@@ -293,27 +284,28 @@ def generate_seo_content_with_retry(provider, api_key, model_name, title, handle
     for attempt in range(max_retries):
         try:
             if provider == "Google Gemini":
-                configure_genai(api_key)
-                GenerativeModel = getattr(genai, "GenerativeModel", None)
-                if not callable(GenerativeModel):
-                    raise RuntimeError("google.generativeai.GenerativeModel is not available in this SDK version")
-                model: Any = GenerativeModel(model_name)
+                client = get_genai_client(api_key)
+                if not client:
+                    raise ValueError("Google API Key not provided")
 
-                # Prefer Structured Outputs (if supported by the installed SDK).
+                # Prefer Structured Outputs using the modern SDK.
                 try:
-                    response = model.generate_content(
-                        prompt,
-                        generation_config=cast(Any, {
-                            "response_mime_type": "application/json",
-                            "response_schema": SEOData,
-                        }),
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=SEOData,
+                        ),
                     )
                 except Exception:
                     # Fallback: request JSON only and validate locally with Pydantic.
-                    response = model.generate_content(
-                        prompt
-                        + "\n\nReturn ONLY valid JSON (no markdown, no prose).",
-                        generation_config={"response_mime_type": "application/json"},
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt + "\n\nReturn ONLY valid JSON (no markdown, no prose).",
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        ),
                     )
 
                 data = _parse_and_validate(response.text)
