@@ -1,6 +1,6 @@
 # ShopifySEO
 
-Streamlit app for generating and syncing SEO content to Shopify collections (CSV via Matrixify or direct Shopify API).
+Streamlit app for generating and syncing SEO content to Shopify collections with Google Gemini (CSV via Matrixify or direct Shopify API).
 
 ## Quick start
 
@@ -21,8 +21,7 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 
 Edit `.streamlit/secrets.toml` and set:
 
-- `GOOGLE_API_KEY` (if using Google Gemini)
-- `PERPLEXITY_API_KEY` (if using Perplexity Sonar)
+- `GOOGLE_API_KEY`
 - `SHOPIFY_SHOP_URL` and `SHOPIFY_ACCESS_TOKEN` (only needed for Direct Sync)
 
 1. Run the app:

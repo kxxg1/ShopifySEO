@@ -1,5 +1,5 @@
 # REQUIREMENTS (Paste these into your requirements.txt or pip install command):
-# pip install streamlit pandas google-genai ShopifyAPI openai pydantic pandera
+# pip install streamlit pandas google-genai ShopifyAPI pydantic pandera
 
 import streamlit as st
 import pandas as pd
@@ -8,7 +8,6 @@ try:
 except Exception:  # pragma: no cover
     genai = None  # type: ignore[assignment]
 import shopify
-from openai import OpenAI
 import json
 import time
 import random
@@ -46,55 +45,47 @@ st.sidebar.header("⚙️ Settings")
 default_google_key = get_secret("GOOGLE_API_KEY", "")
 default_shop_url = get_secret("SHOPIFY_SHOP_URL", "")
 default_shop_token = get_secret("SHOPIFY_ACCESS_TOKEN", "")
-default_perplexity_key = get_secret("PERPLEXITY_API_KEY", "")
 
 st.sidebar.subheader("1. AI Configuration")
-api_provider = st.sidebar.radio("AI Provider", ["Google Gemini", "Perplexity (Sonar)"], horizontal=True)
+api_key = st.sidebar.text_input("Google Gemini API Key", value=default_google_key, type="password", help="Get this from Google AI Studio")
 
-if api_provider == "Google Gemini":
-    api_key = st.sidebar.text_input("Google Gemini API Key", value=default_google_key, type="password", help="Get this from Google AI Studio")
-    
-    if default_google_key:
-        st.sidebar.caption("Using default from secrets.")
-    elif api_key:
-        st.sidebar.caption("Using manually entered API key.")
+if default_google_key:
+    st.sidebar.caption("Using default from secrets.")
+elif api_key:
+    st.sidebar.caption("Using manually entered API key.")
+else:
+    st.sidebar.caption("No API key provided yet.")
+
+model_option = st.sidebar.selectbox(
+    "Select AI Model",
+    (
+        "gemini-2.5-flash",       # Recommended (Fast + Smart)
+        "gemini-2.0-flash",       # Stable
+        "gemini-2.0-flash-lite",  # Cheaper
+        "gemini-2.5-pro",         # High Reasoning (Slower)
+        "gemini-pro-latest"       # Legacy
+    ),
+    help="Select the Gemini model version."
+)
+
+if st.sidebar.button("🔍 Check Available Google Models"):
+    if not api_key:
+        st.sidebar.error("Enter API Key first.")
     else:
-        st.sidebar.caption("No API key provided yet.")
+        try:
+            if genai is None:
+                raise RuntimeError("Google GenAI SDK not installed. Run: pip install -r requirements.txt")
 
-    model_option = st.sidebar.selectbox(
-        "Select AI Model",
-        (
-            "gemini-2.5-flash",       # Recommended (Fast + Smart)
-            "gemini-2.0-flash",       # Stable
-            "gemini-2.0-flash-lite",  # Cheaper
-            "gemini-2.5-pro",         # High Reasoning (Slower)
-            "gemini-pro-latest"       # Legacy
-        ),
-        help="Select the Gemini model version."
-    )
-
-    if st.sidebar.button("🔍 Check Available Google Models"):
-        if not api_key:
-            st.sidebar.error("Enter API Key first.")
-        else:
+            client = genai.Client(api_key=api_key)
+            # Listing models is the closest equivalent to the old SDK "smoke test".
+            # Some accounts/projects may not have permission to list models; init is still valid.
             try:
-                if genai is None:
-                    raise RuntimeError("Google GenAI SDK not installed. Run: pip install -r requirements.txt")
-
-                client = genai.Client(api_key=api_key)
-                # Listing models is the closest equivalent to the old SDK "smoke test".
-                # Some accounts/projects may not have permission to list models; init is still valid.
-                try:
-                    _ = client.models.list()
-                    st.sidebar.success("Client initialized successfully!")
-                except Exception as list_err:
-                    st.sidebar.warning(f"Client initialized, but listing models failed: {list_err}")
-            except Exception as e:
-                st.sidebar.error(f"Error: {e}")
-
-else: # Perplexity
-    api_key = st.sidebar.text_input("Perplexity API Key", value=default_perplexity_key, type="password")
-    model_option = st.sidebar.selectbox("Select AI Model", ("sonar-pro-reasoning", "sonar-pro", "sonar"))
+                _ = client.models.list()
+                st.sidebar.success("Client initialized successfully!")
+            except Exception as list_err:
+                st.sidebar.warning(f"Client initialized, but listing models failed: {list_err}")
+        except Exception as e:
+            st.sidebar.error(f"Error: {e}")
 
 rpm = st.sidebar.slider("Requests Per Minute (RPM)", 1, 60, 15)
 request_delay = 60.0 / rpm
@@ -147,22 +138,7 @@ def clean_json_string(text_response):
     if text_response.endswith("```"): text_response = text_response[:-3]
     return text_response.strip()
 
-def generate_perplexity_content(api_key, model, prompt):
-    if not api_key: raise ValueError("Perplexity API Key is missing.")
-    client = OpenAI(api_key=api_key, base_url="https://api.perplexity.ai")
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are an SEO expert. Output strict JSON only."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        raise Exception(f"Perplexity API Error: {str(e)}")
-
-def generate_seo_content_with_retry(provider, api_key, model_name, title, handle, max_retries=3):
+def generate_seo_content_with_retry(api_key, model_name, title, handle, max_retries=3):
     prompt = f"""
     You are a senior SEO strategist.
     Context: Single Shopify collection. Title: "{title}", Handle: "{handle}".
@@ -197,37 +173,32 @@ def generate_seo_content_with_retry(provider, api_key, model_name, title, handle
 
     for attempt in range(max_retries):
         try:
-            if provider == "Google Gemini":
-                client = configure_genai(api_key)
-                if client is None:
-                    raise ValueError("Google Gemini API key is missing.")
+            client = configure_genai(api_key)
+            if client is None:
+                raise ValueError("Google Gemini API key is missing.")
 
-                # Per the current SDK docs: provide a JSON schema to constrain output.
-                response_schema = SEOData.model_json_schema()
-                # Gemini 2.0 models require explicit property ordering.
-                if model_name.startswith("gemini-2.0"):
-                    response_schema = dict(response_schema)
-                    response_schema["propertyOrdering"] = list(SEOData.model_fields.keys())
+            # Per the current SDK docs: provide a JSON schema to constrain output.
+            response_schema = SEOData.model_json_schema()
+            # Gemini 2.0 models require explicit property ordering.
+            if model_name.startswith("gemini-2.0"):
+                response_schema = dict(response_schema)
+                response_schema["propertyOrdering"] = list(SEOData.model_fields.keys())
 
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={
-                        "response_mime_type": "application/json",
-                        "response_json_schema": response_schema,
-                        "temperature": 0.6,
-                    },
-                )
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_json_schema": response_schema,
+                    "temperature": 0.6,
+                },
+            )
 
-                raw_text = getattr(response, "text", None)
-                if not raw_text:
-                    raw_text = str(response)
+            raw_text = getattr(response, "text", None)
+            if not raw_text:
+                raw_text = str(response)
 
-                return _parse_and_validate(raw_text), None
-
-            elif provider == "Perplexity (Sonar)":
-                raw_text = generate_perplexity_content(api_key, model_name, prompt)
-                return _parse_and_validate(raw_text), None
+            return _parse_and_validate(raw_text), None
             
         except Exception as e:
             if attempt == max_retries - 1: return None, str(e)
@@ -344,7 +315,7 @@ with tab1:
                 status_container.write(f"Processing ({row_num}/{total_process}): **{title}**")
                 
                 # Call AI
-                data, error = generate_seo_content_with_retry(api_provider, api_key, model_option, title, handle)
+                data, error = generate_seo_content_with_retry(api_key, model_option, title, handle)
 
                 if data:
                     df.at[index, 'Metafield: title_tag [string]'] = data.get('title_tag', '')
